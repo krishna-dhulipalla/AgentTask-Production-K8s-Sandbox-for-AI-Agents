@@ -160,6 +160,11 @@ func (r *AgentTaskReconciler) ensurePod(ctx context.Context, task *executionv1al
 	if err != nil && errors.IsNotFound(err) {
 		image := r.resolveImage(task.Spec.RuntimeProfile)
 
+		// Prepare Security Contexts
+		var runAsNonRoot bool = true
+		var allowPrivilegeEscalation bool = false
+		var readOnlyRootFilesystem bool = true
+
 		pod = &corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      podName,
@@ -170,16 +175,33 @@ func (r *AgentTaskReconciler) ensurePod(ctx context.Context, task *executionv1al
 			},
 			Spec: corev1.PodSpec{
 				RestartPolicy: corev1.RestartPolicyNever,
+				SecurityContext: &corev1.PodSecurityContext{
+					RunAsNonRoot: &runAsNonRoot,
+					SeccompProfile: &corev1.SeccompProfile{
+						Type: corev1.SeccompProfileTypeRuntimeDefault,
+					},
+				},
 				Containers: []corev1.Container{
 					{
 						Name:    "task",
 						Image:   image,
 						Command: []string{"python", "/workspace/entrypoint.py"},
+						SecurityContext: &corev1.SecurityContext{
+							AllowPrivilegeEscalation: &allowPrivilegeEscalation,
+							ReadOnlyRootFilesystem:   &readOnlyRootFilesystem,
+							Capabilities: &corev1.Capabilities{
+								Drop: []corev1.Capability{"ALL"},
+							},
+						},
 						VolumeMounts: []corev1.VolumeMount{
 							{
 								Name:      "code",
 								MountPath: "/workspace",
 								ReadOnly:  true,
+							},
+							{
+								Name:      "tmp",
+								MountPath: "/tmp",
 							},
 						},
 						Resources: task.Spec.Resources,
@@ -194,10 +216,15 @@ func (r *AgentTaskReconciler) ensurePod(ctx context.Context, task *executionv1al
 							},
 						},
 					},
+					{
+						Name: "tmp",
+						VolumeSource: corev1.VolumeSource{
+							EmptyDir: &corev1.EmptyDirVolumeSource{},
+						},
+					},
 				},
 			},
 		}
-		// TODO: Add SecurityContext (US-2.2)
 
 		if err := r.Create(ctx, pod); err != nil {
 			return err
