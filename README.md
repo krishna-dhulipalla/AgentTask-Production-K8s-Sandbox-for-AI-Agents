@@ -1,135 +1,126 @@
-# agenttask-operator
-// TODO(user): Add simple overview of use/purpose
+# AgentTask Operator
 
-## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+A Kubernetes Operator for managing the lifecycle of ephemeral, secure, and isolated agentic tasks.
+
+It provides a higher-level abstraction (`AgentTask`) over bare Pods, adding robust lifecycle management, security hardening, and ease of use for running AI agents or arbitrary code snippets.
+
+## Features
+
+### 🛡️ Secure by Design
+
+- **Rootless Execution**: Tasks run as non-root user (UID 1000) by default.
+- **Network Isolation**: Every task gets a default-deny NetworkPolicy, blocking all ingress and egress traffic.
+- **Hardened Sandbox**: Read-only filesystem, specific capability drops, and Seccomp profiles.
+- **Validation Webhooks**: Rejects invalid configurations (e.g., disallowed runtime profiles or dangerous timeouts) before they reach the cluster.
+
+### ⚡ Lifecycle Management
+
+- **Timeouts**: Built-in timeout enforcement to prevent runaway processes.
+- **Cancellation**: Support for active cancellation of running tasks.
+- **Result Capture**: Structured JSON results automatically extracted from the execution.
+- **Failure Propagation**: Detailed failure reasons and exit codes propagated to the Task status.
+
+### 🛠️ Developer Experience
+
+- **Custom Resource Definition (CRD)**: Declarative API for defining tasks.
+- **`agentctl` CLI**: A dedicated command-line tool to run, list, log, and manage tasks without writing YAML.
 
 ## Getting Started
 
 ### Prerequisites
-- go version v1.24.6+
-- docker version 17.03+.
-- kubectl version v1.11.3+.
-- Access to a Kubernetes v1.11.3+ cluster.
 
-### To Deploy on the cluster
-**Build and push your image to the location specified by `IMG`:**
+- Kubernetes Cluster (v1.23+)
+- `kubectl` installed and configured
+- `cert-manager` (required for validation webhooks)
 
-```sh
-make docker-build docker-push IMG=<some-registry>/agenttask-operator:tag
+### Installation
+
+1. **Install cert-manager** (if not already present):
+
+   ```bash
+   kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.17.0/cert-manager.yaml
+   ```
+
+2. **Deploy the Operator**:
+
+   ```bash
+   # Clone the repository
+   git clone https://github.com/your-org/agenttask-operator.git
+   cd agenttask-operator
+
+   # Install CRDs
+   make install
+
+   # Build and Deploy (requires Docker)
+   make docker-build IMG=controller:latest
+   kind load docker-image controller:latest --name agenttask # If using Kind
+   make deploy IMG=controller:latest
+   ```
+
+## Usage (CLI)
+
+The `agentctl` tool is the easiest way to interact with the system.
+
+### Build CLI
+
+```bash
+go build -o agentctl cmd/agentctl/main.go
 ```
 
-**NOTE:** This image ought to be published in the personal registry you specified.
-And it is required to have access to pull the image from the working environment.
-Make sure you have the proper permission to the registry if the above commands don’t work.
+### Run a Task
 
-**Install the CRDs into the cluster:**
+Create a python script `hello.py`:
 
-```sh
-make install
+```python
+print("Hello from the secure sandbox!")
 ```
 
-**Deploy the Manager to the cluster with the image specified by `IMG`:**
+Run it:
 
-```sh
-make deploy IMG=<some-registry>/agenttask-operator:tag
+```bash
+./agentctl run hello.py --profile python3.11
 ```
 
-> **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
-privileges or be logged in as admin.
+### Manage Tasks
 
-**Create instances of your solution**
-You can apply the samples (examples) from the config/sample:
+```bash
+# List all tasks
+./agentctl list
 
-```sh
-kubectl apply -k config/samples/
+# Get logs
+./agentctl logs hello-xxxxx
+
+# Delete a task
+./agentctl delete hello-xxxxx
 ```
 
->**NOTE**: Ensure that the samples has default values to test it out.
+## Usage (YAML)
 
-### To Uninstall
-**Delete the instances (CRs) from the cluster:**
+You can also create tasks using standard Kubernetes YAML:
 
-```sh
-kubectl delete -k config/samples/
+```yaml
+apiVersion: execution.agenttask.io/v1alpha1
+kind: AgentTask
+metadata:
+  name: my-task
+spec:
+  runtimeProfile: python3.11
+  timeoutSeconds: 300
+  code:
+    source: |
+      import os
+      print(f"Running as user: {os.getuid()}")
+  resources:
+    limits:
+      cpu: "500m"
+      memory: "128Mi"
 ```
-
-**Delete the APIs(CRDs) from the cluster:**
-
-```sh
-make uninstall
-```
-
-**UnDeploy the controller from the cluster:**
-
-```sh
-make undeploy
-```
-
-## Project Distribution
-
-Following the options to release and provide this solution to the users.
-
-### By providing a bundle with all YAML files
-
-1. Build the installer for the image built and published in the registry:
-
-```sh
-make build-installer IMG=<some-registry>/agenttask-operator:tag
-```
-
-**NOTE:** The makefile target mentioned above generates an 'install.yaml'
-file in the dist directory. This file contains all the resources built
-with Kustomize, which are necessary to install this project without its
-dependencies.
-
-2. Using the installer
-
-Users can just run 'kubectl apply -f <URL for YAML BUNDLE>' to install
-the project, i.e.:
-
-```sh
-kubectl apply -f https://raw.githubusercontent.com/<org>/agenttask-operator/<tag or branch>/dist/install.yaml
-```
-
-### By providing a Helm Chart
-
-1. Build the chart using the optional helm plugin
-
-```sh
-kubebuilder edit --plugins=helm/v2-alpha
-```
-
-2. See that a chart was generated under 'dist/chart', and users
-can obtain this solution from there.
-
-**NOTE:** If you change the project, you need to update the Helm Chart
-using the same command above to sync the latest changes. Furthermore,
-if you create webhooks, you need to use the above command with
-the '--force' flag and manually ensure that any custom configuration
-previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml'
-is manually re-applied afterwards.
 
 ## Contributing
-// TODO(user): Add detailed information on how you would like others to contribute to this project
 
-**NOTE:** Run `make help` for more information on all potential `make` targets
-
-More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
+See [Development Guide](docs/setup_guide.md) for detailed setup and verification steps.
 
 ## License
 
 Copyright 2026 AgentTask Authors.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-
+Licensed under the Apache License, Version 2.0.
