@@ -42,7 +42,7 @@ var listCmd = &cobra.Command{
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
 		fmt.Fprintln(w, "NAME\tPHASE\tAGE\tPOD")
-		
+
 		for _, task := range taskList.Items {
 			age := "Unknown"
 			if task.CreationTimestamp.Time.IsZero() == false {

@@ -21,8 +21,7 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"k8s.io/apimachinery/pkg/types"
-	
+
 	executionv1alpha1 "agenttask.io/operator/api/v1alpha1"
 )
 
@@ -34,11 +33,11 @@ var deleteCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
 		task := &executionv1alpha1.AgentTask{}
-		// We need to fetch it first to get ResourceVersion for deletion? 
+		// We need to fetch it first to get ResourceVersion for deletion?
 		// Actually client.Delete only needs ObjectMeta with Name/Namespace for basic delete
 		task.Name = name
 		task.Namespace = "default"
-		
+
 		err := k8sClient.Delete(context.Background(), task)
 		if err != nil {
 			return err

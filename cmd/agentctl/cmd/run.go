@@ -24,7 +24,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	executionv1alpha1 "agenttask.io/operator/api/v1alpha1"
@@ -57,7 +56,7 @@ Example: agentctl run my_script.py`,
 		// Actually, let's append a timestamp-ish suffix to avoid collision on repeated runs
 		// But for CLI simplicity, maybe the user wants to name it?
 		// Let's rely on GenerateName metadata feature of K8s, creating with a GenerateName prefix.
-		
+
 		task := &executionv1alpha1.AgentTask{
 			ObjectMeta: metav1.ObjectMeta{
 				GenerateName: name + "-",

@@ -223,6 +223,7 @@ func (r *AgentTaskReconciler) ensurePod(ctx context.Context, task *executionv1al
 
 		// Prepare Security Contexts
 		var runAsNonRoot bool = true
+		var runAsUser int64 = 1000
 		var allowPrivilegeEscalation bool = false
 		var readOnlyRootFilesystem bool = true
 
@@ -241,6 +242,7 @@ func (r *AgentTaskReconciler) ensurePod(ctx context.Context, task *executionv1al
 				RestartPolicy: corev1.RestartPolicyNever,
 				SecurityContext: &corev1.PodSecurityContext{
 					RunAsNonRoot: &runAsNonRoot,
+					RunAsUser:    &runAsUser,
 					SeccompProfile: &corev1.SeccompProfile{
 						Type: corev1.SeccompProfileTypeRuntimeDefault,
 					},
@@ -250,6 +252,10 @@ func (r *AgentTaskReconciler) ensurePod(ctx context.Context, task *executionv1al
 						Name:    "task",
 						Image:   image,
 						Command: []string{"python", "/workspace/entrypoint.py"},
+						Env: []corev1.EnvVar{
+							{Name: "PYTHONDONTWRITEBYTECODE", Value: "1"},
+							{Name: "PYTHONUNBUFFERED", Value: "1"},
+						},
 						SecurityContext: &corev1.SecurityContext{
 							AllowPrivilegeEscalation: &allowPrivilegeEscalation,
 							ReadOnlyRootFilesystem:   &readOnlyRootFilesystem,
