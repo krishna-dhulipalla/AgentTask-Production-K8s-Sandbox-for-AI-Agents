@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -86,6 +87,11 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		}
 		// Otherwise, transition to Canceled and clean up
 		return r.reconcileCanceled(ctx, agentTask)
+	}
+
+	// 1. Check Timeout (US-2.5)
+	if timeout := r.checkTimeout(agentTask); timeout {
+		return r.reconcileTimeout(ctx, agentTask)
 	}
 
 	// State Machine
@@ -324,10 +330,7 @@ func (r *AgentTaskReconciler) reconcileScheduled(ctx context.Context, task *exec
 		task.Status.Phase = executionv1alpha1.AgentTaskPhaseRunning
 		return r.Status().Update(ctx, task)
 	case corev1.PodSucceeded:
-		task.Status.Phase = executionv1alpha1.AgentTaskPhaseSucceeded
-		now := metav1.Now()
-		task.Status.CompletionTime = &now
-		return r.Status().Update(ctx, task)
+		return r.handlePodSuccess(ctx, task, pod)
 	case corev1.PodFailed:
 		return r.handlePodFailure(ctx, task, pod)
 	}
@@ -351,10 +354,7 @@ func (r *AgentTaskReconciler) reconcileRunning(ctx context.Context, task *execut
 		// Still running, check timeout logic here later (US-2.5)
 		return nil
 	case corev1.PodSucceeded:
-		task.Status.Phase = executionv1alpha1.AgentTaskPhaseSucceeded
-		now := metav1.Now()
-		task.Status.CompletionTime = &now
-		return r.Status().Update(ctx, task)
+		return r.handlePodSuccess(ctx, task, pod)
 	case corev1.PodFailed:
 		return r.handlePodFailure(ctx, task, pod)
 	}
@@ -378,6 +378,27 @@ func (r *AgentTaskReconciler) handlePodFailure(ctx context.Context, task *execut
 				task.Status.Message = status.State.Terminated.Message
 			}
 			task.Status.Reason = status.State.Terminated.Reason
+			break
+		}
+	}
+
+	return r.Status().Update(ctx, task)
+}
+
+func (r *AgentTaskReconciler) handlePodSuccess(ctx context.Context, task *executionv1alpha1.AgentTask, pod *corev1.Pod) error {
+	task.Status.Phase = executionv1alpha1.AgentTaskPhaseSucceeded
+	now := metav1.Now()
+	task.Status.CompletionTime = &now
+
+	// Extract result from termination message
+	for _, status := range pod.Status.ContainerStatuses {
+		if status.Name == "task" && status.State.Terminated != nil {
+			if msg := status.State.Terminated.Message; msg != "" {
+				task.Status.Result = &executionv1alpha1.ExecutionResult{
+					JSON: msg,
+				}
+			}
+			task.Status.ExitCode = status.State.Terminated.ExitCode
 			break
 		}
 	}
@@ -421,6 +442,45 @@ func (r *AgentTaskReconciler) reconcileCanceled(ctx context.Context, task *execu
 	task.Status.CompletionTime = &now
 	task.Status.Message = "Task was canceled by user request"
 	task.Status.Reason = "Canceled"
+
+	if err := r.Status().Update(ctx, task); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{}, nil
+}
+
+func (r *AgentTaskReconciler) checkTimeout(task *executionv1alpha1.AgentTask) bool {
+	if task.Spec.TimeoutSeconds <= 0 {
+		return false
+	}
+	if task.Status.StartTime == nil {
+		return false
+	}
+	// Give a small buffer of 2 seconds
+	deadline := task.Status.StartTime.Add(time.Duration(task.Spec.TimeoutSeconds)*time.Second + 2*time.Second)
+	return time.Now().After(deadline)
+}
+
+func (r *AgentTaskReconciler) reconcileTimeout(ctx context.Context, task *executionv1alpha1.AgentTask) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+	log.Info("AgentTask timed out", "name", task.Name)
+
+	// Reuse cancellation logic to clean up pod
+	if task.Status.PodRef.Name != "" {
+		pod := &corev1.Pod{}
+		err := r.Get(ctx, types.NamespacedName{Name: task.Status.PodRef.Name, Namespace: task.Status.PodRef.Namespace}, pod)
+		if err == nil {
+			if err := r.Delete(ctx, pod); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+	}
+
+	task.Status.Phase = executionv1alpha1.AgentTaskPhaseTimeout
+	now := metav1.Now()
+	task.Status.CompletionTime = &now
+	task.Status.Reason = "Timeout"
+	task.Status.Message = "Task execution exceeded the timeout limit."
 
 	if err := r.Status().Update(ctx, task); err != nil {
 		return ctrl.Result{}, err
