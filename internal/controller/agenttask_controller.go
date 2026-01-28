@@ -25,13 +25,15 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/utils/ptr"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	executionv1alpha1 "agenttask.io/operator/api/v1alpha1"
+	"agenttask.io/operator/internal/platform/sandbox"
 )
 
 // AgentTaskReconciler reconciles a AgentTask object
@@ -142,14 +144,18 @@ func (r *AgentTaskReconciler) reconcilePending(ctx context.Context, task *execut
 
 	// 4. Dispatch
 	if backend == "sandbox" {
-		// US-3.2: Implement ensureSandbox(ctx, task, cmName)
-		// For now, fail if sandbox is selected but not implemented
-		return r.updatePhaseFailure(ctx, task, "NotImplemented", "Sandbox backend is available but not yet implemented.")
-	} 
-	
-	// Default to Pod
-	if err := r.ensurePod(ctx, task, cmName); err != nil {
-		return err
+		// US-3.2: Creation
+		sbManager := &sandbox.Manager{Client: r.Client}
+		objRef, err := sbManager.EnsureSandbox(ctx, task, cmName)
+		if err != nil {
+			return err
+		}
+		task.Status.PodRef = *objRef
+	} else {
+		// Default to Pod
+		if err := r.ensurePod(ctx, task, cmName); err != nil {
+			return err
+		}
 	}
 
 	// 5. Update Status
@@ -191,11 +197,11 @@ func (r *AgentTaskReconciler) checkSandboxAvailability(ctx context.Context) (boo
 	// We assume a hypothetical CRD name "sandboxes.execution.agenttask.io" for now
 	crdName := "sandboxes.execution.agenttask.io" 
 	crd := &metav1.PartialObjectMetadata{}
-	crd.SetGroupVersionKind(ptr.To(types.GroupVersionKind{
+	crd.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   "apiextensions.k8s.io",
 		Version: "v1",
 		Kind:    "CustomResourceDefinition",
-	}))
+	})
 	
 	err := r.Get(ctx, types.NamespacedName{Name: crdName}, crd)
 	if err != nil {
@@ -383,6 +389,14 @@ func (r *AgentTaskReconciler) ensurePod(ctx context.Context, task *executionv1al
 
 func (r *AgentTaskReconciler) reconcileScheduled(ctx context.Context, task *executionv1alpha1.AgentTask) error {
 	log := logf.FromContext(ctx)
+
+	// Check if this is a Sandbox
+	if task.Status.PodRef.Kind == "Sandbox" {
+		// For MVP Mock, we assume if it exists, it's running.
+		// In reality, we'd fetch the Sandbox object and check its Status field.
+		task.Status.Phase = executionv1alpha1.AgentTaskPhaseRunning
+		return r.Status().Update(ctx, task)
+	}
 
 	// Fetch the Pod
 	pod := &corev1.Pod{}
