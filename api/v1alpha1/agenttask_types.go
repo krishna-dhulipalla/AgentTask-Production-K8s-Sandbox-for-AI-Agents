@@ -119,6 +119,20 @@ const (
 	AgentTaskPhaseCanceled  AgentTaskPhase = "Canceled"
 )
 
+// AgentTaskReason describes why a task is in a specific condition or phase.
+type AgentTaskReason string
+
+const (
+	AgentTaskReasonPodFailed              AgentTaskReason = "PodFailed"
+	AgentTaskReasonTimeout                AgentTaskReason = "Timeout"
+	AgentTaskReasonCanceled               AgentTaskReason = "Canceled"
+	AgentTaskReasonPodMissing             AgentTaskReason = "PodMissing"
+	AgentTaskReasonImagePullFailed        AgentTaskReason = "ImagePullFailed"
+	AgentTaskReasonProfileResolutionFailed AgentTaskReason = "ProfileResolutionFailed"
+	AgentTaskReasonBackendSelectionFailed AgentTaskReason = "BackendSelectionFailed"
+	AgentTaskReasonValidationFailed       AgentTaskReason = "ValidationFailed"
+)
+
 // ExecutionResult holds the structured result or reference.
 type ExecutionResult struct {
 	// JSON is the raw JSON result (if small).

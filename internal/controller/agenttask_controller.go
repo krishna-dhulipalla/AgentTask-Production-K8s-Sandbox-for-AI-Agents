@@ -25,6 +25,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -32,10 +33,35 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
+
+	"github.com/prometheus/client_golang/prometheus"
 
 	executionv1alpha1 "agenttask.io/operator/api/v1alpha1"
 	"agenttask.io/operator/internal/platform/sandbox"
 )
+
+var (
+	tasksTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "agenttask_total_tasks",
+			Help: "Total number of AgentTasks processed",
+		},
+		[]string{"phase", "reason"},
+	)
+	taskDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "agenttask_duration_seconds",
+			Help:    "Time taken for AgentTask to reach terminal state",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"phase"},
+	)
+)
+
+func init() {
+	metrics.Registry.MustRegister(tasksTotal, taskDuration)
+}
 
 // AgentTaskReconciler reconciles a AgentTask object
 type AgentTaskReconciler struct {
@@ -141,7 +167,7 @@ func (r *AgentTaskReconciler) reconcilePending(ctx context.Context, task *execut
 	// 3. Select Backend (US-3.1)
 	backend, err := r.selectBackend(ctx, task)
 	if err != nil {
-		return r.updatePhaseFailure(ctx, task, "BackendSelectionFailed", err.Error())
+		return r.updatePhaseFailure(ctx, task, string(executionv1alpha1.AgentTaskReasonBackendSelectionFailed), err.Error())
 	}
 	
 	// Resolve Image (US-3.3)
@@ -150,7 +176,7 @@ func (r *AgentTaskReconciler) reconcilePending(ctx context.Context, task *execut
 	// we just use a single resolve function that returns the right image based on backend.
 	image, err := r.resolveRuntimeProfile(ctx, task.Spec.RuntimeProfile, backend, task.Namespace)
 	if err != nil {
-		return r.updatePhaseFailure(ctx, task, "ProfileResolutionFailed", err.Error())
+		return r.updatePhaseFailure(ctx, task, string(executionv1alpha1.AgentTaskReasonProfileResolutionFailed), err.Error())
 	}
 
 	// 4. Dispatch
@@ -401,7 +427,9 @@ func (r *AgentTaskReconciler) ensurePod(ctx context.Context, task *executionv1al
 					{
 						Name: "artifacts",
 						VolumeSource: corev1.VolumeSource{
-							EmptyDir: &corev1.EmptyDirVolumeSource{},
+							EmptyDir: &corev1.EmptyDirVolumeSource{
+								SizeLimit: resource.NewQuantity(100*1024*1024, resource.BinarySI), // 100Mi
+							},
 						},
 					},
 				},
@@ -441,8 +469,9 @@ func (r *AgentTaskReconciler) reconcileScheduled(ctx context.Context, task *exec
 	if err != nil {
 		if errors.IsNotFound(err) {
 			// Pod is missing? Transition to Failed
+			// Pod is missing? Transition to Failed
 			log.Error(err, "Pod missing for Scheduled task", "pod", task.Status.PodRef.Name)
-			return r.updatePhaseFailure(ctx, task, "PodMissing", "The execution pod was deleted unexpectedly.")
+			return r.updatePhaseFailure(ctx, task, string(executionv1alpha1.AgentTaskReasonPodMissing), "The execution pod was deleted unexpectedly.")
 		}
 		return err
 	}
@@ -450,6 +479,12 @@ func (r *AgentTaskReconciler) reconcileScheduled(ctx context.Context, task *exec
 	// Check Pod Status
 	switch pod.Status.Phase {
 	case corev1.PodPending:
+		// Check for ImagePullBackOff
+		for _, status := range pod.Status.ContainerStatuses {
+			if status.State.Waiting != nil && (status.State.Waiting.Reason == "ImagePullBackOff" || status.State.Waiting.Reason == "ErrImagePull") {
+				return r.updatePhaseFailure(ctx, task, string(executionv1alpha1.AgentTaskReasonImagePullFailed), fmt.Sprintf("Failed to pull image %s: %s", status.Image, status.State.Waiting.Message))
+			}
+		}
 		// Still waiting
 		return nil
 	case corev1.PodRunning:
@@ -476,7 +511,7 @@ func (r *AgentTaskReconciler) reconcileRunning(ctx context.Context, task *execut
 	err := r.Get(ctx, types.NamespacedName{Name: task.Status.PodRef.Name, Namespace: task.Status.PodRef.Namespace}, pod)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			return r.updatePhaseFailure(ctx, task, "PodMissing", "The execution pod was deleted while running.")
+			return r.updatePhaseFailure(ctx, task, string(executionv1alpha1.AgentTaskReasonPodMissing), "The execution pod was deleted while running.")
 		}
 		return err
 	}
@@ -511,11 +546,23 @@ func (r *AgentTaskReconciler) handlePodFailure(ctx context.Context, task *execut
 	task.Status.CompletionTime = &now
 
 	// Extract failure reason
-	task.Status.Reason = "PodFailed"
+	// Extract failure reason
+	task.Status.Reason = string(executionv1alpha1.AgentTaskReasonPodFailed)
 	task.Status.Message = "The execution pod failed."
 
-	// Try to get exit code
+	// Metrics
+	tasksTotal.WithLabelValues("Failed", "PodFailed").Inc()
+	if task.Status.StartTime != nil {
+		duration := task.Status.CompletionTime.Time.Sub(task.Status.StartTime.Time).Seconds()
+		taskDuration.WithLabelValues("Failed").Observe(duration)
+	}
+
+	// Try to get exit code and container statuses
 	for _, status := range pod.Status.ContainerStatuses {
+		if status.State.Waiting != nil && (status.State.Waiting.Reason == "ImagePullBackOff" || status.State.Waiting.Reason == "ErrImagePull") {
+			task.Status.Reason = string(executionv1alpha1.AgentTaskReasonImagePullFailed)
+			task.Status.Message = fmt.Sprintf("Failed to pull image %s: %s", status.Image, status.State.Waiting.Message)
+		}
 		if status.Name == "task" && status.State.Terminated != nil {
 			task.Status.ExitCode = status.State.Terminated.ExitCode
 			if status.State.Terminated.Message != "" {
@@ -532,6 +579,13 @@ func (r *AgentTaskReconciler) handlePodFailure(ctx context.Context, task *execut
 
 	if err := r.Delete(ctx, pod); err != nil && !errors.IsNotFound(err) {
 		return err
+	}
+
+	// Metrics
+	tasksTotal.WithLabelValues("Failed", task.Status.Reason).Inc()
+	if task.Status.StartTime != nil {
+		duration := task.Status.CompletionTime.Time.Sub(task.Status.StartTime.Time).Seconds()
+		taskDuration.WithLabelValues("Failed").Observe(duration)
 	}
 
 	return nil
@@ -563,6 +617,13 @@ func (r *AgentTaskReconciler) handlePodSuccess(ctx context.Context, task *execut
 		return err
 	}
 
+	// Metrics
+	tasksTotal.WithLabelValues("Succeeded", "PodSucceeded").Inc()
+	if task.Status.StartTime != nil {
+		duration := task.Status.CompletionTime.Time.Sub(task.Status.StartTime.Time).Seconds()
+		taskDuration.WithLabelValues("Succeeded").Observe(duration)
+	}
+
 	return nil
 }
 
@@ -572,6 +633,14 @@ func (r *AgentTaskReconciler) updatePhaseFailure(ctx context.Context, task *exec
 	task.Status.Message = message
 	now := metav1.Now()
 	task.Status.CompletionTime = &now
+
+	// Metrics
+	tasksTotal.WithLabelValues("Failed", reason).Inc()
+	if task.Status.StartTime != nil {
+		duration := task.Status.CompletionTime.Time.Sub(task.Status.StartTime.Time).Seconds()
+		taskDuration.WithLabelValues("Failed").Observe(duration)
+	}
+
 	return r.Status().Update(ctx, task)
 }
 
@@ -601,7 +670,15 @@ func (r *AgentTaskReconciler) reconcileCanceled(ctx context.Context, task *execu
 	now := metav1.Now()
 	task.Status.CompletionTime = &now
 	task.Status.Message = "Task was canceled by user request"
-	task.Status.Reason = "Canceled"
+	task.Status.Message = "Task was canceled by user request"
+	task.Status.Reason = string(executionv1alpha1.AgentTaskReasonCanceled)
+
+	// Metrics
+	tasksTotal.WithLabelValues("Canceled", string(executionv1alpha1.AgentTaskReasonCanceled)).Inc()
+	if task.Status.StartTime != nil {
+		duration := task.Status.CompletionTime.Time.Sub(task.Status.StartTime.Time).Seconds()
+		taskDuration.WithLabelValues("Canceled").Observe(duration)
+	}
 
 	if err := r.Status().Update(ctx, task); err != nil {
 		return ctrl.Result{}, err
@@ -639,8 +716,16 @@ func (r *AgentTaskReconciler) reconcileTimeout(ctx context.Context, task *execut
 	task.Status.Phase = executionv1alpha1.AgentTaskPhaseTimeout
 	now := metav1.Now()
 	task.Status.CompletionTime = &now
-	task.Status.Reason = "Timeout"
+	task.Status.Reason = string(executionv1alpha1.AgentTaskReasonTimeout)
 	task.Status.Message = "Task execution exceeded the timeout limit."
+	task.Status.Message = "Task execution exceeded the timeout limit."
+
+	// Metrics
+	tasksTotal.WithLabelValues("Timeout", string(executionv1alpha1.AgentTaskReasonTimeout)).Inc()
+	if task.Status.StartTime != nil {
+		duration := task.Status.CompletionTime.Time.Sub(task.Status.StartTime.Time).Seconds()
+		taskDuration.WithLabelValues("Timeout").Observe(duration)
+	}
 
 	if err := r.Status().Update(ctx, task); err != nil {
 		return ctrl.Result{}, err
