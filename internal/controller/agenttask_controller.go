@@ -340,6 +340,8 @@ func (r *AgentTaskReconciler) ensurePod(ctx context.Context, task *executionv1al
 							{Name: "PYTHONDONTWRITEBYTECODE", Value: "1"},
 							{Name: "PYTHONUNBUFFERED", Value: "1"},
 						},
+						TerminationMessagePath:   "/workspace/artifacts/result.json",
+						TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 						SecurityContext: &corev1.SecurityContext{
 							AllowPrivilegeEscalation: &allowPrivilegeEscalation,
 							ReadOnlyRootFilesystem:   &readOnlyRootFilesystem,
