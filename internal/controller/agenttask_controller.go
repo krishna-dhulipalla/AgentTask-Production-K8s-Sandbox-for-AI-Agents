@@ -357,8 +357,28 @@ func (r *AgentTaskReconciler) ensurePod(ctx context.Context, task *executionv1al
 								Name:      "tmp",
 								MountPath: "/tmp",
 							},
+							{
+								Name:      "artifacts",
+								MountPath: "/workspace/artifacts",
+							},
 						},
 						Resources: task.Spec.Resources,
+					},
+					// Sidecar Container (US-4.1)
+					{
+						Name:  "artifacts-collector",
+						Image: "alpine:latest",
+						Command: []string{
+							"/bin/sh", "-c",
+							"while true; do if [ -d /workspace/artifacts ]; then for f in /workspace/artifacts/*; do if [ -f \"$f\" ]; then echo \"Uploading artifact: $(basename $f)\"; fi; done; fi; sleep 5; done",
+						},
+						VolumeMounts: []corev1.VolumeMount{
+							{
+								Name:      "artifacts",
+								MountPath: "/workspace/artifacts",
+								ReadOnly:  true,
+							},
+						},
 					},
 				},
 				Volumes: []corev1.Volume{
@@ -372,6 +392,12 @@ func (r *AgentTaskReconciler) ensurePod(ctx context.Context, task *executionv1al
 					},
 					{
 						Name: "tmp",
+						VolumeSource: corev1.VolumeSource{
+							EmptyDir: &corev1.EmptyDirVolumeSource{},
+						},
+					},
+					{
+						Name: "artifacts",
 						VolumeSource: corev1.VolumeSource{
 							EmptyDir: &corev1.EmptyDirVolumeSource{},
 						},
@@ -455,6 +481,18 @@ func (r *AgentTaskReconciler) reconcileRunning(ctx context.Context, task *execut
 
 	switch pod.Status.Phase {
 	case corev1.PodRunning:
+		// Check if the MAIN container ("task") has terminated.
+		// This handles the "Sidecar Problem" where the Pod stays Running because the sidecar is still up.
+		for _, cs := range pod.Status.ContainerStatuses {
+			if cs.Name == "task" && cs.State.Terminated != nil {
+				if cs.State.Terminated.ExitCode == 0 {
+					return r.handlePodSuccess(ctx, task, pod)
+				} else {
+					return r.handlePodFailure(ctx, task, pod)
+				}
+			}
+		}
+
 		// Still running, check timeout logic here later (US-2.5)
 		return nil
 	case corev1.PodSucceeded:
@@ -486,7 +524,15 @@ func (r *AgentTaskReconciler) handlePodFailure(ctx context.Context, task *execut
 		}
 	}
 
-	return r.Status().Update(ctx, task)
+	if err := r.Status().Update(ctx, task); err != nil {
+		return err
+	}
+
+	if err := r.Delete(ctx, pod); err != nil && !errors.IsNotFound(err) {
+		return err
+	}
+
+	return nil
 }
 
 func (r *AgentTaskReconciler) handlePodSuccess(ctx context.Context, task *executionv1alpha1.AgentTask, pod *corev1.Pod) error {
@@ -507,7 +553,15 @@ func (r *AgentTaskReconciler) handlePodSuccess(ctx context.Context, task *execut
 		}
 	}
 
-	return r.Status().Update(ctx, task)
+	if err := r.Status().Update(ctx, task); err != nil {
+		return err
+	}
+
+	if err := r.Delete(ctx, pod); err != nil && !errors.IsNotFound(err) {
+		return err
+	}
+
+	return nil
 }
 
 func (r *AgentTaskReconciler) updatePhaseFailure(ctx context.Context, task *executionv1alpha1.AgentTask, reason, message string) error {
@@ -628,6 +682,7 @@ func (r *AgentTaskReconciler) resolveRuntimeProfile(ctx context.Context, profile
 func (r *AgentTaskReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&executionv1alpha1.AgentTask{}).
+		Owns(&corev1.Pod{}).
 		Named("agenttask").
 		Complete(r)
 }
