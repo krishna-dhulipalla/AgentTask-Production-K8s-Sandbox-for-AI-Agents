@@ -56,7 +56,6 @@ var listCmd = &cobra.Command{
 			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", task.Name, Phase, task.Status.Reason, age, task.Status.PodRef.Name)
 		}
 		return w.Flush()
-		return nil
 	},
 }
 

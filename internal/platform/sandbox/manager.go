@@ -26,7 +26,7 @@ type Manager struct {
 
 func (m *Manager) EnsureSandbox(ctx context.Context, task *executionv1alpha1.AgentTask, cmName string, image string) (*corev1.ObjectReference, error) {
 	sandboxName := task.Name + "-sandbox"
-	
+
 	// Check if exists
 	sandbox := &unstructured.Unstructured{}
 	sandbox.SetGroupVersionKind(SandboxGVK)
@@ -48,11 +48,11 @@ func (m *Manager) EnsureSandbox(ctx context.Context, task *executionv1alpha1.Age
 	sandbox.SetGroupVersionKind(SandboxGVK)
 	sandbox.SetName(sandboxName)
 	sandbox.SetNamespace(task.Namespace)
-	
+
 	// Construct Spec
 	// This mirrors the structure of the Mock CRD we created
 	sandbox.Object["spec"] = map[string]any{
-		"image": image,
+		"image":   image,
 		"command": []string{"python", "/workspace/entrypoint.py"},
 		// We would map volumes/mounts here if the Sandbox API supports it
 		// For MVP mock, we just set image/command
@@ -73,5 +73,3 @@ func (m *Manager) EnsureSandbox(ctx context.Context, task *executionv1alpha1.Age
 		Namespace: sandbox.GetNamespace(),
 	}, nil
 }
-
-

@@ -132,10 +132,10 @@ const (
 	AgentTaskReasonTimeout                 AgentTaskReason = "Timeout"
 	AgentTaskReasonCanceled                AgentTaskReason = "Canceled"
 	AgentTaskReasonPodMissing              AgentTaskReason = "PodMissing"
-	AgentTaskReasonImagePullFailed        AgentTaskReason = "ImagePullFailed"
+	AgentTaskReasonImagePullFailed         AgentTaskReason = "ImagePullFailed"
 	AgentTaskReasonProfileResolutionFailed AgentTaskReason = "ProfileResolutionFailed"
-	AgentTaskReasonBackendSelectionFailed AgentTaskReason = "BackendSelectionFailed"
-	AgentTaskReasonValidationFailed       AgentTaskReason = "ValidationFailed"
+	AgentTaskReasonBackendSelectionFailed  AgentTaskReason = "BackendSelectionFailed"
+	AgentTaskReasonValidationFailed        AgentTaskReason = "ValidationFailed"
 )
 
 // ExecutionResult holds the structured result or reference.

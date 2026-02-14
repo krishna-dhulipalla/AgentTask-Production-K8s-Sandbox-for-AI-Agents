@@ -71,7 +71,11 @@ var logsCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("error in opening stream: %w", err)
 		}
-		defer podLogs.Close()
+		defer func() {
+			if closeErr := podLogs.Close(); closeErr != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "error closing pod log stream: %v\n", closeErr)
+			}
+		}()
 
 		_, err = io.Copy(os.Stdout, podLogs)
 		if err != nil {

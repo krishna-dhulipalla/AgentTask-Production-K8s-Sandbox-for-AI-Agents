@@ -43,47 +43,46 @@ var describeCmd = &cobra.Command{
 			return err
 		}
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 8, 1, '\t', 0)
+		w := tabwriter.NewWriter(os.Stdout, 0, 8, 1, '\t', 0)
 
-	_, _ = fmt.Fprintf(w, "Name:\t%s\n", task.Name)
-	_, _ = fmt.Fprintf(w, "Namespace:\t%s\n", task.Namespace)
-	_, _ = fmt.Fprintf(w, "Labels:\t%v\n", task.Labels)
-	_, _ = fmt.Fprintf(w, "Annotations:\t%v\n", task.Annotations)
+		_, _ = fmt.Fprintf(w, "Name:\t%s\n", task.Name)
+		_, _ = fmt.Fprintf(w, "Namespace:\t%s\n", task.Namespace)
+		_, _ = fmt.Fprintf(w, "Labels:\t%v\n", task.Labels)
+		_, _ = fmt.Fprintf(w, "Annotations:\t%v\n", task.Annotations)
 
-	_, _ = fmt.Fprintln(w, "\nStatus:")
-	if task.Status.Reason != "" {
-		_, _ = fmt.Fprintf(w, "  Reason:\t%s\n", task.Status.Reason)
-	}
-	if task.Status.Message != "" {
-		_, _ = fmt.Fprintf(w, "  Message:\t%s\n", task.Status.Message)
-	}
+		_, _ = fmt.Fprintln(w, "\nStatus:")
+		if task.Status.Reason != "" {
+			_, _ = fmt.Fprintf(w, "  Reason:\t%s\n", task.Status.Reason)
+		}
+		if task.Status.Message != "" {
+			_, _ = fmt.Fprintf(w, "  Message:\t%s\n", task.Status.Message)
+		}
 
-	if task.Status.StartTime != nil {
-		_, _ = fmt.Fprintf(w, "  Start Time:\t%s\n", task.Status.StartTime.Time.Format(time.RFC3339))
-	}
-	if task.Status.CompletionTime != nil {
-		_, _ = fmt.Fprintf(w, "  Completion Time:\t%s\n", task.Status.CompletionTime.Time.Format(time.RFC3339))
 		if task.Status.StartTime != nil {
-			d := task.Status.CompletionTime.Time.Sub(task.Status.StartTime.Time)
-			_, _ = fmt.Fprintf(w, "  Duration:\t%s\n", duration.HumanDuration(d))
+			_, _ = fmt.Fprintf(w, "  Start Time:\t%s\n", task.Status.StartTime.Format(time.RFC3339))
 		}
-	}
-
-	_, _ = fmt.Fprintln(w, "\nExecution:")
-	if task.Status.PodRef.Name != "" {
-		_, _ = fmt.Fprintf(w, "  Pod Name:\t%s\n", task.Status.PodRef.Name)
-	}
-	_, _ = fmt.Fprintf(w, "  Exit Code:\t%d\n", task.Status.ExitCode)
-
-	if task.Status.Result != nil {
-		_, _ = fmt.Fprintln(w, "\nResult:")
-		if task.Status.Result.JSON != "" {
-			_, _ = fmt.Fprintf(w, "  JSON:\t%s\n", task.Status.Result.JSON)
+		if task.Status.CompletionTime != nil {
+			_, _ = fmt.Fprintf(w, "  Completion Time:\t%s\n", task.Status.CompletionTime.Format(time.RFC3339))
+			if task.Status.StartTime != nil {
+				d := task.Status.CompletionTime.Time.Sub(task.Status.StartTime.Time)
+				_, _ = fmt.Fprintf(w, "  Duration:\t%s\n", duration.HumanDuration(d))
+			}
 		}
-	}
 
-	return w.Flush()
-		return nil
+		_, _ = fmt.Fprintln(w, "\nExecution:")
+		if task.Status.PodRef.Name != "" {
+			_, _ = fmt.Fprintf(w, "  Pod Name:\t%s\n", task.Status.PodRef.Name)
+		}
+		_, _ = fmt.Fprintf(w, "  Exit Code:\t%d\n", task.Status.ExitCode)
+
+		if task.Status.Result != nil {
+			_, _ = fmt.Fprintln(w, "\nResult:")
+			if task.Status.Result.JSON != "" {
+				_, _ = fmt.Fprintf(w, "  JSON:\t%s\n", task.Status.Result.JSON)
+			}
+		}
+
+		return w.Flush()
 	},
 }
 

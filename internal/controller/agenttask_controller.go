@@ -24,8 +24,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -70,6 +70,13 @@ type AgentTaskReconciler struct {
 	Scheme *runtime.Scheme
 }
 
+const (
+	backendAuto       = "auto"
+	backendPod        = "pod"
+	backendSandbox    = "sandbox"
+	containerTaskName = "task"
+)
+
 // +kubebuilder:rbac:groups=execution.agenttask.io,resources=agenttasks,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=execution.agenttask.io,resources=agenttasks/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=execution.agenttask.io,resources=agenttasks/finalizers,verbs=update
@@ -101,7 +108,7 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	agentTaskFinalizer := "execution.agenttask.io/finalizer"
 
 	// Check if the object is being deleted
-	if agentTask.ObjectMeta.DeletionTimestamp.IsZero() {
+	if agentTask.DeletionTimestamp.IsZero() {
 		// Not being deleted, add finalizer if missing
 		if !controllerutil.ContainsFinalizer(agentTask, agentTaskFinalizer) {
 			controllerutil.AddFinalizer(agentTask, agentTaskFinalizer)
@@ -219,7 +226,7 @@ func (r *AgentTaskReconciler) reconcilePending(ctx context.Context, task *execut
 	if err != nil {
 		return r.updatePhaseFailure(ctx, task, string(executionv1alpha1.AgentTaskReasonBackendSelectionFailed), err.Error())
 	}
-	
+
 	// Resolve Image (US-3.3)
 	// We need to resolve the image differently for Pod vs Sandbox?
 	// Actually, let's assume the ConfigMap has keys like "python3.11" (Pod) and "python3.11-sandbox" (Sandbox) OR
@@ -230,7 +237,7 @@ func (r *AgentTaskReconciler) reconcilePending(ctx context.Context, task *execut
 	}
 
 	// 4. Dispatch
-	if backend == "sandbox" {
+	if backend == backendSandbox {
 		// US-3.2: Creation
 		sbManager := &sandbox.Manager{Client: r.Client}
 		objRef, err := sbManager.EnsureSandbox(ctx, task, cmName, image)
@@ -253,43 +260,44 @@ func (r *AgentTaskReconciler) reconcilePending(ctx context.Context, task *execut
 func (r *AgentTaskReconciler) selectBackend(ctx context.Context, task *executionv1alpha1.AgentTask) (string, error) {
 	requested := task.Spec.Backend
 	if requested == "" {
-		requested = "auto"
+		requested = backendAuto
 	}
 
+	log := logf.FromContext(ctx)
 	sandboxAvailable, err := r.checkSandboxAvailability(ctx)
 	if err != nil {
-		// Log warning but don't fail, assume false
-		// logf.FromContext(ctx).Error(err, "Failed to check sandbox availability")
+		log.Error(err, "Failed to check sandbox availability")
+		sandboxAvailable = false
 	}
 
-	if requested == "sandbox" {
+	if requested == backendSandbox {
 		if !sandboxAvailable {
 			return "", errors.NewBadRequest("sandbox backend requested but not available")
 		}
-		return "sandbox", nil
+		return backendSandbox, nil
 	}
 
-	if requested == "auto" {
+	if requested == backendAuto {
 		if sandboxAvailable {
-			return "sandbox", nil
+			return backendSandbox, nil
 		}
-		return "pod", nil
+		return backendPod, nil
 	}
 
-	return "pod", nil
+	return backendPod, nil
 }
 
 func (r *AgentTaskReconciler) checkSandboxAvailability(ctx context.Context) (bool, error) {
 	// Check if the Sandbox CRD exists
 	// We assume a hypothetical CRD name "sandboxes.execution.agenttask.io" for now
-	crdName := "sandboxes.execution.agenttask.io" 
+	crdName := "sandboxes.execution.agenttask.io"
 	crd := &metav1.PartialObjectMetadata{}
 	crd.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   "apiextensions.k8s.io",
 		Version: "v1",
 		Kind:    "CustomResourceDefinition",
 	})
-	
+
 	err := r.Get(ctx, types.NamespacedName{Name: crdName}, crd)
 	if err != nil {
 		if errors.IsNotFound(err) {
@@ -377,7 +385,7 @@ func (r *AgentTaskReconciler) ensurePod(ctx context.Context, task *executionv1al
 	err := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: task.Namespace}, pod)
 	if err != nil && errors.IsNotFound(err) {
 		// Prepare Security Contexts
-			runAsNonRoot := true
+		runAsNonRoot := true
 		var runAsUser int64 = 1000
 		allowPrivilegeEscalation := false
 		readOnlyRootFilesystem := true
@@ -409,7 +417,7 @@ func (r *AgentTaskReconciler) ensurePod(ctx context.Context, task *executionv1al
 				},
 				Containers: []corev1.Container{
 					{
-						Name:    "task",
+						Name:    containerTaskName,
 						Image:   image,
 						Command: []string{"python", "/workspace/entrypoint.py"},
 						Env: []corev1.EnvVar{
@@ -571,7 +579,7 @@ func (r *AgentTaskReconciler) reconcileRunning(ctx context.Context, task *execut
 		// Check if the MAIN container ("task") has terminated.
 		// This handles the "Sidecar Problem" where the Pod stays Running because the sidecar is still up.
 		for _, cs := range pod.Status.ContainerStatuses {
-			if cs.Name == "task" && cs.State.Terminated != nil {
+			if cs.Name == containerTaskName && cs.State.Terminated != nil {
 				if cs.State.Terminated.ExitCode == 0 {
 					return r.handlePodSuccess(ctx, task, pod)
 				} else {
@@ -613,7 +621,7 @@ func (r *AgentTaskReconciler) handlePodFailure(ctx context.Context, task *execut
 			task.Status.Reason = string(executionv1alpha1.AgentTaskReasonImagePullFailed)
 			task.Status.Message = fmt.Sprintf("Failed to pull image %s: %s", status.Image, status.State.Waiting.Message)
 		}
-		if status.Name == "task" && status.State.Terminated != nil {
+		if status.Name == containerTaskName && status.State.Terminated != nil {
 			task.Status.ExitCode = status.State.Terminated.ExitCode
 			if status.State.Terminated.Message != "" {
 				task.Status.Message = status.State.Terminated.Message
@@ -648,7 +656,7 @@ func (r *AgentTaskReconciler) handlePodSuccess(ctx context.Context, task *execut
 
 	// Extract result from termination message
 	for _, status := range pod.Status.ContainerStatuses {
-		if status.Name == "task" && status.State.Terminated != nil {
+		if status.Name == containerTaskName && status.State.Terminated != nil {
 			if msg := status.State.Terminated.Message; msg != "" {
 				task.Status.Result = &executionv1alpha1.ExecutionResult{
 					JSON: msg,
@@ -787,17 +795,17 @@ func (r *AgentTaskReconciler) resolveRuntimeProfile(ctx context.Context, profile
 	// 1. Try ConfigMap
 	cm := &corev1.ConfigMap{}
 	// We look for the ConfigMap in the same namespace as the task (for now) or a specific system namespace.
-	// For MVP, let's look in the task's namespace to allow user overrides, 
+	// For MVP, let's look in the task's namespace to allow user overrides,
 	// OR (better) look in the operator's namespace... but we don't know it easily.
 	// Let's assume it's in the SAME namespace as the Task for simplicity of testing.
 	err := r.Get(ctx, types.NamespacedName{Name: "agenttask-runtime-profiles", Namespace: namespace}, cm)
 	if err == nil {
 		// ConfigMap exists
 		key := profile
-		if backend == "sandbox" {
+		if backend == backendSandbox {
 			key = profile + "-sandbox"
 		}
-		
+
 		if val, ok := cm.Data[key]; ok {
 			return val, nil
 		}
@@ -806,7 +814,7 @@ func (r *AgentTaskReconciler) resolveRuntimeProfile(ctx context.Context, profile
 	// 2. Fallback to Hardcoded Defaults
 	switch profile {
 	case "python3.11", "python3.10":
-		if backend == "sandbox" {
+		if backend == backendSandbox {
 			return "agent-sandbox-python:3.11", nil
 		}
 		return "python:3.11-slim", nil
