@@ -1,4 +1,4 @@
-# AgentTask Operator
+# AgentTask: Production K8s Sandbox for AI Agents
 
 **Production-Grade AI Agent Execution on Kubernetes**
 
