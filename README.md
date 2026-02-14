@@ -1,6 +1,4 @@
-# AgentTask Operator
-
-**Production-Grade AI Agent Execution on Kubernetes**
+# AgentTask: Production-Grade AI Agent Runtime for Kubernetes
 
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
 ![Status](https://img.shields.io/badge/status-beta-orange.svg)
@@ -28,19 +26,19 @@ The **AgentTask Operator** provides a robust, secure, and K8s-native abstraction
 
 ```mermaid
 graph TD
-    User[User / CLI] -->|Creates| CR[AgentTask CR]
-    Controller[AgentTask Controller] -->|Watches| CR
-    Controller -->|Creates| CM[ConfigMap (Code)]
-    Controller -->|Creates| Pod[Worker Pod]
-    Controller -->|Enforces| NP[NetworkPolicy]
+    User["User / CLI"] -->|Creates| CR["AgentTask CR"]
+    Controller["AgentTask Controller"] -->|Watches| CR
+    Controller -->|Creates| CM["ConfigMap (Code)"]
+    Controller -->|Creates| Pod["Worker Pod"]
+    Controller -->|Enforces| NP["NetworkPolicy"]
 
     subgraph "Execution Environment"
         Pod -->|Mounts| CM
-        Pod -->|Runs| Container[Task Container]
-        Container -->|Writes| Result[result.json]
+        Pod -->|Runs| Container["Task Container"]
+        Container -->|Writes| Result["result.json"]
     end
 
-    Controller -- Collects --> Status[Task Status]
+    Controller -- Collects --> Status["Task Status"]
     Status -- Exposes --> Result
 ```
 
