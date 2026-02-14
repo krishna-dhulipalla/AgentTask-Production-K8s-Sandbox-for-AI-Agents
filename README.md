@@ -1,126 +1,147 @@
 # AgentTask Operator
 
-A Kubernetes Operator for managing the lifecycle of ephemeral, secure, and isolated agentic tasks.
+**Production-Grade AI Agent Execution on Kubernetes**
 
-It provides a higher-level abstraction (`AgentTask`) over bare Pods, adding robust lifecycle management, security hardening, and ease of use for running AI agents or arbitrary code snippets.
+![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
+![Status](https://img.shields.io/badge/status-beta-orange.svg)
 
-## Features
+The **AgentTask Operator** provides a robust, secure, and K8s-native abstraction for running ephemeral AI agents and code snippets. It bridges the gap between raw Pods and high-level agent frameworks, offering built-in lifecycle management, result capture, and security hardening.
 
-### 🛡️ Secure by Design
+## 🚀 Key Features
 
-- **Rootless Execution**: Tasks run as non-root user (UID 1000) by default.
-- **Network Isolation**: Every task gets a default-deny NetworkPolicy, blocking all ingress and egress traffic.
-- **Hardened Sandbox**: Read-only filesystem, specific capability drops, and Seccomp profiles.
-- **Validation Webhooks**: Rejects invalid configurations (e.g., disallowed runtime profiles or dangerous timeouts) before they reach the cluster.
+- **Secure Isolation**:
+  - **Rootless Execution**: Tasks run as UID 1000 by default.
+  - **Network Sandbox**: Default-deny NetworkPolicies block unauthorized traffic.
+  - **Runtime Profiles**: Whitelist specific images and capabilities (e.g., `python3.11`, `node18`).
+- **Lifecycle Management**:
+  - **TTL Cleanup**: Automatically delete finished tasks after a configurable duration (`ttlSecondsAfterFinished`).
+  - **Finalizers**: Ensure external resources (Pods, Sandboxes) are strictly cleaned up before API objects are removed.
+  - **Timeouts & Cancellation**: strictly enforce execution limits.
+- **Observability**:
+  - **Standardized Failures**: Explicit reasons for failure (`ImagePullFailed`, `Timeout`, `PodFailed`) in the status.
+  - **Prometheus Metrics**: Built-in metrics for task counts and duration (`agenttask_total_tasks`, `agenttask_duration_seconds`).
+  - **Structured Results**: Automatically captures `result.json` from the task execution.
+- **Developer Experience**:
+  - **`agentctl` CLI**: A specialized tool to run, inspect, and debug agents without writing YAML.
 
-### ⚡ Lifecycle Management
+## 🏗️ Architecture
 
-- **Timeouts**: Built-in timeout enforcement to prevent runaway processes.
-- **Cancellation**: Support for active cancellation of running tasks.
-- **Result Capture**: Structured JSON results automatically extracted from the execution.
-- **Failure Propagation**: Detailed failure reasons and exit codes propagated to the Task status.
+```mermaid
+graph TD
+    User[User / CLI] -->|Creates| CR[AgentTask CR]
+    Controller[AgentTask Controller] -->|Watches| CR
+    Controller -->|Creates| CM[ConfigMap (Code)]
+    Controller -->|Creates| Pod[Worker Pod]
+    Controller -->|Enforces| NP[NetworkPolicy]
 
-### 🛠️ Developer Experience
+    subgraph "Execution Environment"
+        Pod -->|Mounts| CM
+        Pod -->|Runs| Container[Task Container]
+        Container -->|Writes| Result[result.json]
+    end
 
-- **Custom Resource Definition (CRD)**: Declarative API for defining tasks.
-- **`agentctl` CLI**: A dedicated command-line tool to run, list, log, and manage tasks without writing YAML.
+    Controller -- Collects --> Status[Task Status]
+    Status -- Exposes --> Result
+```
 
-## Getting Started
+## 📦 Installation
 
 ### Prerequisites
 
-- Kubernetes Cluster (v1.23+)
-- `kubectl` installed and configured
-- `cert-manager` (required for validation webhooks)
+- Kubernetes v1.25+
+- `kubectl` configured
+- `cert-manager` (for Webhook validation)
 
-### Installation
-
-1. **Install cert-manager** (if not already present):
-
-   ```bash
-   kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.17.0/cert-manager.yaml
-   ```
-
-2. **Deploy the Operator**:
-
-   ```bash
-   # Clone the repository
-   git clone https://github.com/your-org/agenttask-operator.git
-   cd agenttask-operator
-
-   # Install CRDs
-   make install
-
-   # Build and Deploy (requires Docker)
-   make docker-build IMG=controller:latest
-   kind load docker-image controller:latest --name agenttask # If using Kind
-   make deploy IMG=controller:latest
-   ```
-
-## Usage (CLI)
-
-The `agentctl` tool is the easiest way to interact with the system.
-
-### Build CLI
+### Deploy
 
 ```bash
-go build -o agentctl cmd/agentctl/main.go
+# 1. Install cert-manager
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.16.0/cert-manager.yaml
+
+# 2. Deploy Operator
+make deploy IMG=ghcr.io/agenttask/controller:latest
 ```
 
-### Run a Task
+## 🛠️ Usage (CLI)
 
-Create a python script `hello.py`:
+The `agentctl` CLI is the recommended way to interact with the operator.
+
+### 1. Build CLI
+
+```bash
+cd cmd/agentctl
+go build -o ../../agentctl main.go
+cd ../..
+```
+
+### 2. Run an Agent
+
+Create a script `agent.py`:
 
 ```python
-print("Hello from the secure sandbox!")
+import json
+print("Generating insight...")
+print("INSIGHT: {'value': 42}") # Standard output log
+# Write structured result
+with open("/workspace/artifacts/result.json", "w") as f:
+    json.dump({"status": "success", "insight": 42}, f)
 ```
 
 Run it:
 
 ```bash
-./agentctl run hello.py --profile python3.11
+./agentctl run agent.py --profile python3.11 --timeout 60
 ```
 
-### Manage Tasks
+### 3. Inspect Execution
 
 ```bash
-# List all tasks
+# List tasks with standardized reasons
 ./agentctl list
+# Output:
+# NAME                 PHASE       REASON      AGE   POD
+# agent-sample-x8dj2   Succeeded               12s   agent-sample-x8dj2-pod
+# agent-fail-9k2ls     Failed      Timeout     5m    agent-fail-9k2ls-pod
 
-# Get logs
-./agentctl logs hello-xxxxx
-
-# Delete a task
-./agentctl delete hello-xxxxx
+# Get detailed info & results
+./agentctl describe agent-sample-x8dj2
 ```
 
-## Usage (YAML)
+## 📝 Usage (YAML)
 
-You can also create tasks using standard Kubernetes YAML:
+For GitOps workflows, use the CRD directly:
 
 ```yaml
 apiVersion: execution.agenttask.io/v1alpha1
 kind: AgentTask
 metadata:
-  name: my-task
+  name: periodic-agent
 spec:
-  runtimeProfile: python3.11
+  runtimeProfile: "python3.11"
   timeoutSeconds: 300
+  ttlSecondsAfterFinished: 600 # Delete 10m after finish
   code:
     source: |
       import os
-      print(f"Running as user: {os.getuid()}")
+      print(f"Running secure task in K8s!")
   resources:
     limits:
-      cpu: "500m"
-      memory: "128Mi"
+      cpu: "1"
+      memory: "512Mi"
 ```
 
-## Contributing
+## 🔍 Troubleshooting
 
-See [Development Guide](docs/setup_guide.md) for detailed setup and verification steps.
+| Issue             | Cause                                                                    | Fix                                                           |
+| :---------------- | :----------------------------------------------------------------------- | :------------------------------------------------------------ |
+| `ImagePullFailed` | The RuntimeProfile maps to an invalid image or registry auth is missing. | Check controller logs and `runtimeProfile` config.            |
+| `Timeout`         | Task took longer than `timeoutSeconds`.                                  | Optimize code or increase timeout in Spec.                    |
+| `Webhook Denied`  | The request violated security policies (e.g. invalid profile).           | Check `kubectl describe` events or admission controller logs. |
 
-## License
+## 🤝 Contributing
 
-Copyright 2026 AgentTask Authors.
-Licensed under the Apache License, Version 2.0.
+See [Development Guide](docs/setup_guide.md) for local setup instructions.
+
+## 📄 License
+
+Apache 2.0

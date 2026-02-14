@@ -96,6 +96,37 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// Define Finalizer
+	agentTaskFinalizer := "execution.agenttask.io/finalizer"
+
+	// Check if the object is being deleted
+	if agentTask.ObjectMeta.DeletionTimestamp.IsZero() {
+		// Not being deleted, add finalizer if missing
+		if !ctrl.ContainsFinalizer(agentTask, agentTaskFinalizer) {
+			ctrl.AddFinalizer(agentTask, agentTaskFinalizer)
+			if err := r.Update(ctx, agentTask); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{}, nil
+		}
+	} else {
+		// Being deleted
+		if ctrl.ContainsFinalizer(agentTask, agentTaskFinalizer) {
+			// Run finalization logic
+			if err := r.finalizeAgentTask(ctx, agentTask); err != nil {
+				return ctrl.Result{}, err
+			}
+
+			// Remove finalizer
+			ctrl.RemoveFinalizer(agentTask, agentTaskFinalizer)
+			if err := r.Update(ctx, agentTask); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		// Stop reconciliation
+		return ctrl.Result{}, nil
+	}
+
 	// Initialize Phase if empty
 	if agentTask.Status.Phase == "" {
 		agentTask.Status.Phase = executionv1alpha1.AgentTaskPhasePending
@@ -141,8 +172,26 @@ func (r *AgentTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		if err := r.reconcileRunning(ctx, agentTask); err != nil {
 			return ctrl.Result{}, err
 		}
-	case executionv1alpha1.AgentTaskPhaseSucceeded, executionv1alpha1.AgentTaskPhaseFailed, executionv1alpha1.AgentTaskPhaseCanceled:
-		// Terminal states, no further action needed
+	case executionv1alpha1.AgentTaskPhaseSucceeded, executionv1alpha1.AgentTaskPhaseFailed, executionv1alpha1.AgentTaskPhaseCanceled, executionv1alpha1.AgentTaskPhaseTimeout:
+		// Terminal states
+		// Check for TTL Cleanup (US-8.1)
+		if agentTask.Spec.TTLSecondsAfterFinished != nil {
+			ttl := time.Duration(*agentTask.Spec.TTLSecondsAfterFinished) * time.Second
+			if agentTask.Status.CompletionTime != nil {
+				expirationTime := agentTask.Status.CompletionTime.Add(ttl)
+				if time.Now().After(expirationTime) {
+					// Expired, delete it
+					logf.FromContext(ctx).Info("Task expired based on TTLSecondsAfterFinished, deleting", "name", agentTask.Name)
+					if err := r.Delete(ctx, agentTask); err != nil {
+						return ctrl.Result{}, client.IgnoreNotFound(err)
+					}
+					return ctrl.Result{}, nil
+				}
+				// Not yet expired, requeue at expiration time
+				requeueAfter := time.Until(expirationTime)
+				return ctrl.Result{RequeueAfter: requeueAfter}, nil
+			}
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -772,4 +821,27 @@ func (r *AgentTaskReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Pod{}).
 		Named("agenttask").
 		Complete(r)
+}
+
+func (r *AgentTaskReconciler) finalizeAgentTask(ctx context.Context, task *executionv1alpha1.AgentTask) error {
+	log := logf.FromContext(ctx)
+	log.Info("Finalizing AgentTask", "name", task.Name)
+
+	// Clean up Pod if it exists
+	if task.Status.PodRef.Name != "" {
+		pod := &corev1.Pod{}
+		err := r.Get(ctx, types.NamespacedName{Name: task.Status.PodRef.Name, Namespace: task.Status.PodRef.Namespace}, pod)
+		if err == nil {
+			if err := r.Delete(ctx, pod); err != nil {
+				if !errors.IsNotFound(err) {
+					log.Error(err, "Failed to delete pod during finalization")
+					return err
+				}
+			}
+		} else if !errors.IsNotFound(err) {
+			return err
+		}
+	}
+
+	return nil
 }

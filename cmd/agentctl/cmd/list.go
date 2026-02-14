@@ -42,7 +42,7 @@ var listCmd = &cobra.Command{
 		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(w, "NAME\tPHASE\tAGE\tPOD")
+		fmt.Fprintln(w, "NAME\tPHASE\tREASON\tAGE\tPOD")
 
 		for _, task := range taskList.Items {
 			age := "Unknown"
@@ -53,7 +53,7 @@ var listCmd = &cobra.Command{
 			if Phase == "" {
 				Phase = "Pending"
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", task.Name, Phase, age, task.Status.PodRef.Name)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", task.Name, Phase, task.Status.Reason, age, task.Status.PodRef.Name)
 		}
 		w.Flush()
 		return nil

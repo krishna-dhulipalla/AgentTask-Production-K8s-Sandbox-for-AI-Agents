@@ -53,6 +53,11 @@ type AgentTaskSpec struct {
 	// Canceled indicates if the task should be cancelled.
 	// +optional
 	Canceled bool `json:"canceled,omitempty"`
+
+	// TTLSecondsAfterFinished limits the lifetime of a Task that has finished execution (either Succeeded, Failed, Canceled, or Timeout).
+	// If this field is set, the Task will be automatically deleted this many seconds after it finishes.
+	// +optional
+	TTLSecondsAfterFinished *int32 `json:"ttlSecondsAfterFinished,omitempty"`
 }
 
 // CodeSource defines where to find the code.
